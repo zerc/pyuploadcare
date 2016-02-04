@@ -599,11 +599,15 @@ def api_iterator(cls, next_url, reverse, limit=None):
     while next_url and limit != 0:
         try:
             result = rest_request('GET', next_url)
-        except InvalidRequestError:
+        except InvalidRequestError as e:
+            print(e)
             return
 
         if reverse:
-            working_set = reversed(result['results'])
+            if conf.api_version == '0.5':
+                working_set = result['results']
+            else:
+                working_set = reversed(result['results'])
             next_url = result['previous']
         else:
             working_set = result['results']
@@ -625,15 +629,14 @@ class BaseApiList(object):
     filters = []
 
     def __init__(self, **kwargs):
-        # Only explicit kwargs are allowed.
+        kwargs = dict(kwargs)
 
-        if kwargs.get('since') is not None and kwargs.get('until') is not None:
-            raise TypeError('Only one of since and until arguments is allowed.')
+        self.__init_for_05(kwargs)
+        self.__init_old(kwargs)
 
-        self.since = kwargs.pop('since', None)
-        self.until = kwargs.pop('until', None)
         self.limit = kwargs.pop('limit', None)
         self.request_limit = kwargs.pop('request_limit', None)
+
         self._count = None
 
         for f, default in self.filters:
@@ -644,30 +647,76 @@ class BaseApiList(object):
                 ", ".join(kwargs.keys())
             ))
 
+    def __init_for_05(self, kwargs):
+        self.position = kwargs.pop('position', None)
+        self.ordering = kwargs.pop('ordering', None) or '-datetime_uploaded'
+
+    def __init_old(self, kwargs):
+        # Only explicit kwargs are allowed.
+        if kwargs.get('since') is not None and kwargs.get('until') is not None:
+            raise TypeError('Only one of since and until arguments is allowed.')
+
+        self.since = kwargs.pop('since', None)
+        self.until = kwargs.pop('until', None)
+
     def api_url(self, **additional):
-        qs = {}
-        if self.since is not None:
-            qs['from'] = self.since.isoformat()
-        if self.until is not None:
-            qs['to'] = self.until.isoformat()
-        if self.request_limit:
-            qs['limit'] = self.request_limit
+        if conf.api_version == '0.5':
+            qs = self.api_url_for_05(**additional)
+        else:
+            qs = self.api_url_old(**additional)
+
         for f, default in self.filters:
             v = getattr(self, f)
             if v == default:
                 continue
             qs[f] = 'none' if v is None else str(bool(v)).lower()
         qs.update(additional)
+
         return self.base_url + '?' + urlencode(qs)
+
+    def api_url_for_05(self, **additional):
+        qs = {}
+
+        if self.position is not None:
+            qs['position'] = self.position
+
+        if self.ordering is not None:
+            qs['ordering'] = self.ordering
+
+        if self.request_limit:
+            qs['limit'] = self.request_limit
+
+        return qs
+
+    def api_url_old(self, **additional):
+        qs = {}
+
+        if self.since is not None:
+            qs['from'] = self.since.isoformat()
+
+        if self.until is not None:
+            qs['to'] = self.until.isoformat()
+
+        if self.request_limit:
+            qs['limit'] = self.request_limit
+
+        return qs
+
+    @property
+    def is_reverse(self):
+        if conf.api_version == '0.5':
+            return self.ordering.startswith('-')
+        return self.until is not None
 
     def __iter__(self):
         return api_iterator(
             self.constructor, self.api_url(),
-            self.until is not None, self.limit,
+            self.is_reverse, self.limit,
         )
 
     def count(self):
-        if self.since is not None or self.until is not None:
+        if (getattr(self, 'since', None) is not None or
+                getattr(self, 'until', None) is not None):
             raise ValueError("Can't count objects since or until some date.")
 
         if self._count is None:
@@ -679,10 +728,21 @@ class BaseApiList(object):
 class FileList(BaseApiList):
     """List of File resources.
 
-    This class provides iteration over all uploaded files. You can specify:
+    This class provides iteration over all uploaded files.
+
+    You can specify for api_version < 0.5:
 
     - ``since`` -- a datetime object from which objects will be iterated;
     - ``until`` -- a datetime object to which objects will be iterated;
+
+    If ``until`` is specified, the order of items will be reversed.
+    It is impossible to specify ``since`` and ``until`` at the same time.
+
+    For api_version == 0.5:
+
+    - ``position`` - a starting point for select. Can be datetime or string.
+    - ``ordering`` - an order. String.
+
     - ``limit`` -- a total number of objects to be iterated.
       If not specified, all available objects are iterated;
     - ``stored`` -- ``True`` to include only stored files,
@@ -690,9 +750,6 @@ class FileList(BaseApiList):
     - ``removed`` -- ``True`` to include only removed files,
       ``False`` to exclude, ``None`` will not exclude anything.
       The default is ``False``.
-
-    If ``until`` is specified, the order of items will be reversed.
-    It is impossible to specify ``since`` and ``until`` at the same time.
 
     Files can't be stored and removed at the same time,
     such query will always return an empty set.

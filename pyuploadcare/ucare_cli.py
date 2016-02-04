@@ -45,6 +45,13 @@ def int_or_none(value):
     return None if value.lower() == 'none' else int(value)
 
 
+def iso_datetime_or_raw(value):
+    try:
+        return dateutil.parser.parse(value).isoformat()
+    except (ValueError):
+        return value
+
+
 def list_files(arg_namespace):
     files = FileList(
         since=arg_namespace.since,
@@ -53,6 +60,8 @@ def list_files(arg_namespace):
         stored=arg_namespace.stored,
         removed=arg_namespace.removed,
         request_limit=arg_namespace.request_limit,
+        position=arg_namespace.position,
+        ordering=arg_namespace.ordering,
     )
     files.constructor = lambda x: x
     pprint(list(files))
@@ -253,6 +262,9 @@ def ucare_argparser():
     # list
     subparser = subparsers.add_parser('list', help='list all files')
     subparser.set_defaults(func=list_files)
+    subparser.add_argument('--position', help='position of select',
+                           type=iso_datetime_or_raw)
+    subparser.add_argument('--ordering', help='ordering', type=str)
     subparser.add_argument('--since', help='show files uploaded since',
                            type=dateutil.parser.parse)
     subparser.add_argument('--until', help='show files uploaded until',
