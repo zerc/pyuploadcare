@@ -11,9 +11,49 @@ os.environ['DJANGO_SETTINGS_MODULE'] = 'test_project.settings'
 from mock import patch, MagicMock
 from dateutil.tz import tzutc
 
-from pyuploadcare.api_resources import File, FileGroup, FileList, FilesStorage
-from pyuploadcare.exceptions import InvalidRequestError, InvalidParamError
+from pyuploadcare import conf
+from pyuploadcare.api_resources import (
+    File, FileGroup, FileList, FilesStorage, urlencode)
+from pyuploadcare.exceptions import InvalidParamError
 from .utils import MockResponse, api_response_from_file
+
+
+class FileListTestCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super(FileListTestCase, cls).setUpClass()
+        cls._api_version = conf.api_version
+
+    def tearDown(self):
+        conf.api_version = self._api_version
+
+    def test_raise_error_on_05(self):
+        conf.api_version = '0.5'
+        self.assertRaises(TypeError, FileList, since='since')
+        self.assertRaises(TypeError, FileList, until='until')
+
+    def test_raise_error_on_04(self):
+        conf.api_version = '0.4'
+        self.assertRaises(TypeError, FileList, position='position')
+        self.assertRaises(TypeError, FileList, ordering='ordering')
+
+    def test_api_url_05(self):
+        conf.api_version = '0.5'
+
+        file_list = FileList(ordering='size', position='783')
+        url = file_list.api_url()
+
+        self.assertIn(urlencode({'ordering': 'size'}), url)
+        self.assertIn(urlencode({'position': '783'}), url)
+
+    def test_api_url_04(self):
+        conf.api_version = '0.4'
+        now = datetime.datetime.now()
+
+        file_list = FileList(since=now)
+        url = file_list.api_url()
+
+        self.assertIn(urlencode({'from': now.isoformat()}), url)
 
 
 class FileRegexTest(unittest.TestCase):

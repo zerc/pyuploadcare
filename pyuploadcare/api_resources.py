@@ -599,12 +599,11 @@ def api_iterator(cls, next_url, reverse, limit=None):
     while next_url and limit != 0:
         try:
             result = rest_request('GET', next_url)
-        except InvalidRequestError as e:
-            print(e)
+        except InvalidRequestError:
             return
 
         if reverse:
-            if conf.api_version == '0.5':
+            if float(conf.api_version) >= 0.5:
                 working_set = result['results']
             else:
                 working_set = reversed(result['results'])
@@ -631,12 +630,29 @@ class BaseApiList(object):
     def __init__(self, **kwargs):
         kwargs = dict(kwargs)
 
-        self.__init_for_05(kwargs)
-        self.__init_old(kwargs)
+        # These parameters are supported since 0.5 version
+        self.position = kwargs.pop('position', None)
+        self.ordering = kwargs.pop('ordering', None)
+
+        # Old parameters supported
+        self.since = kwargs.pop('since', None)
+        self.until = kwargs.pop('until', None)
+
+        # Only explicit kwargs are allowed.
+        if self.since is not None and self.until is not None:
+            raise TypeError(
+                'Only one of since and until arguments is allowed.')
+
+        if float(conf.api_version) >= 0.5 and (self.since or self.until):
+            raise TypeError(
+                '`since` and `until` doesn\'t supported in api_version > 0.4')
+
+        if float(conf.api_version) < 0.5 and (self.position or self.ordering):
+            raise TypeError('`position` and `ordering` doesn\'t '
+                            'supported in api_version < 0.5')
 
         self.limit = kwargs.pop('limit', None)
         self.request_limit = kwargs.pop('request_limit', None)
-
         self._count = None
 
         for f, default in self.filters:
@@ -647,23 +663,14 @@ class BaseApiList(object):
                 ", ".join(kwargs.keys())
             ))
 
-    def __init_for_05(self, kwargs):
-        self.position = kwargs.pop('position', None)
-        self.ordering = kwargs.pop('ordering', None) or '-datetime_uploaded'
-
-    def __init_old(self, kwargs):
-        # Only explicit kwargs are allowed.
-        if kwargs.get('since') is not None and kwargs.get('until') is not None:
-            raise TypeError('Only one of since and until arguments is allowed.')
-
-        self.since = kwargs.pop('since', None)
-        self.until = kwargs.pop('until', None)
-
     def api_url(self, **additional):
-        if conf.api_version == '0.5':
-            qs = self.api_url_for_05(**additional)
+        if float(conf.api_version) >= 0.5:
+            qs = self._make_qs_for_05(**additional)
         else:
-            qs = self.api_url_old(**additional)
+            qs = self._make_qs(**additional)
+
+        if self.request_limit:
+            qs['limit'] = self.request_limit
 
         for f, default in self.filters:
             v = getattr(self, f)
@@ -674,7 +681,7 @@ class BaseApiList(object):
 
         return self.base_url + '?' + urlencode(qs)
 
-    def api_url_for_05(self, **additional):
+    def _make_qs_for_05(self, **additional):
         qs = {}
 
         if self.position is not None:
@@ -683,12 +690,9 @@ class BaseApiList(object):
         if self.ordering is not None:
             qs['ordering'] = self.ordering
 
-        if self.request_limit:
-            qs['limit'] = self.request_limit
-
         return qs
 
-    def api_url_old(self, **additional):
+    def _make_qs(self, **additional):
         qs = {}
 
         if self.since is not None:
@@ -697,15 +701,13 @@ class BaseApiList(object):
         if self.until is not None:
             qs['to'] = self.until.isoformat()
 
-        if self.request_limit:
-            qs['limit'] = self.request_limit
-
         return qs
 
     @property
     def is_reverse(self):
-        if conf.api_version == '0.5':
-            return self.ordering.startswith('-')
+        if float(conf.api_version) >= 0.5:
+            # Default reverse
+            return (self.ordering or '-').startswith('-')
         return self.until is not None
 
     def __iter__(self):
@@ -730,6 +732,11 @@ class FileList(BaseApiList):
 
     This class provides iteration over all uploaded files.
 
+    You can specify for api_version >= 0.5:
+
+    - ``position`` - a starting point for select. Can be datetime or string.
+    - ``ordering`` - an order. String.
+
     You can specify for api_version < 0.5:
 
     - ``since`` -- a datetime object from which objects will be iterated;
@@ -738,10 +745,7 @@ class FileList(BaseApiList):
     If ``until`` is specified, the order of items will be reversed.
     It is impossible to specify ``since`` and ``until`` at the same time.
 
-    For api_version == 0.5:
-
-    - ``position`` - a starting point for select. Can be datetime or string.
-    - ``ordering`` - an order. String.
+    Common parameters:
 
     - ``limit`` -- a total number of objects to be iterated.
       If not specified, all available objects are iterated;
